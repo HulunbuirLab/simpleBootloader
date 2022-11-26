@@ -7,6 +7,15 @@
 
 #include "simpleBootloader/efiConsoleControl.h"
 
+typedef struct {
+  void *xdsp_address;
+  uint8_t *memory_map;
+  uint64_t mem_map_size;
+  uint64_t mem_map_descriptor_size;
+} KernelInfo;
+
+typedef void(*KernelFunc)(KernelInfo);
+
 EFI_STATUS
 get_memory_map(OUT void **map, OUT UINTN *mem_map_size, OUT UINTN *mem_map_key,
                OUT UINTN *descriptor_size) {
@@ -118,39 +127,6 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     return EFI_ABORTED;
   }
 
-  // Get access to a simple graphics buffer
-  // Try to close graphic version
-  EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
-  EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
-  
-  UINTN BufferSize = 0;
-  EFI_HANDLE *HandleBuffer = NULL;
-  status = uefi_call_wrapper(BS->LocateHandleBuffer, 5, ByProtocol, &gop_guid, NULL, &BufferSize, &HandleBuffer);
-  if (EFI_ERROR(status)) {
-    Print(
-      L"Could not locate Simple Graphics Output Protocol handle, error: %d. "
-      L"Aborting.\n",
-      status);
-    return EFI_ABORTED;
-  }
-  status = uefi_call_wrapper(BS->HandleProtocol, 3, HandleBuffer[0], &gop_guid, &gop);
-  if (EFI_ERROR(status)) {
-    Print(
-      L"Could not handle Simple Graphics Output Protocol, error: %d. "
-      L"Aborting.\n",
-      status);
-    return EFI_ABORTED;
-  }
-  
-  UINT32 max_mode = gop->Mode->MaxMode;
-  Print(L"Current mode: %d, max mode: %d\n", gop->Mode->Mode, max_mode);
-
-  // uefi_call_wrapper(gop->SetMode, 2, gop, max_mode-2);
-
-  // Wait for keypress to give us time to attach a debugger, etc.
-  // Print(L"Waiting for keypress to continue booting...\n");
-  // wait_for_keypress();
-
   // Get memory map
   UINTN mem_map_size = 0, mem_map_key = 0, mem_map_descriptor_size = 0;
   uint8_t *mem_map = NULL;
@@ -165,26 +141,19 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
       return status;
     }
 
-    //Try to load protocol infomation
-    //EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *EntryArray;
-    //status = uefi_call_wrapper(BS->OpenProtocolInformation, 4, HandleBuffer[0], &gop_guid, &EntryArray, NULL);
-    //if (EFI_ERROR(status)) {
-    //  Print(L"Error getting infomation of gop!\n");
-    //  return status;
-    //}
-    
-    //status = uefi_call_wrapper(BS->CloseProtocol, 4, HandleBuffer[0], &gop_guid, EntryArray->AgentHandle, EntryArray->ControllerHandle);
-    //if (EFI_ERROR(status)) {
-    //  Print(L"Error closing gop!\n");
-    //  return status;
-    //}
     // Exit boot services
     status =
         uefi_call_wrapper(BS->ExitBootServices, 2, ImageHandle, mem_map_key);
     // Execute kernel if we are successful
     if (status == EFI_SUCCESS) {
       // Jump to kernel code
-      ((void(*)())kernel_main_addr)();
+      KernelInfo info = {
+        xdsp_address,
+        mem_map,
+        mem_map_size,
+        mem_map_descriptor_size
+      };
+      ((KernelFunc)kernel_main_addr)(info);
     }
   }
 
